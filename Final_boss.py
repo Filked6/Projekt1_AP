@@ -2,8 +2,6 @@ import arcpy
 from arcpy.sa import *
 import os
 
-from dask.bag.core import accumulate_part
-
 ########################
 # Zmienne środowiskowe #
 ########################
@@ -36,8 +34,33 @@ def import_shp_to_gdb(shp_folder, gdb, startings):
             print(f"Importuję do GDB: {shp} -> {out_name}")
             arcpy.management.CopyFeatures(full_path, out_path)
 
+def distance_from_water_raster(min_val = 100, mean_val = 300, max_val = 1000):
+    river = "rzeka"
+    water = "woda"
+    river_a = arcpy.analysis.Buffer(river, "rzeka_a", "2 Meters")
+    water_all = arcpy.management.Merge([river_a, water], "woda_cala")
+    distance_raster = DistanceAccumulation(water_all)
+    distance_raster.save("distance_raster")
+
+    f = FuzzyLinear(max_val, mean_val)
+    temp_fuzzy_raster = FuzzyMembership(distance_raster, f)
+
+    distance_raster_final = Con(distance_raster < min_val, 0, temp_fuzzy_raster)
+    distance_raster_final.save("final_distance_raster")
+
+    #Usuwanie tego co jest po drodze, jeśli potrzebne to trza zakomentować i będzie git
+    arcpy.management.Delete("woda_cala")
+    arcpy.management.Delete("rzeka_a")
+    arcpy.management.Delete("distance_raster")
+
 #####################
 # Wywołania funkcji #
 #####################
 #Tą funkcję się uruchamia tylko za pierwszym razem, gdy nie mamy plików shp w geobazie
 #import_shp_to_gdb(bdot10k_data, arcpy.env.workspace, acceptable_file_names)
+
+#Funkcja przyjmuje po kolei 3 wartości:
+#-odległość bezpieczna od wody
+#-odległość która jest dalej akceptowalna ale już mniej
+#-maksymalna akceptowalna odległość od wody
+#distance_from_water_raster()
