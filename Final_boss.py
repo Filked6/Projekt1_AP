@@ -46,12 +46,28 @@ def distance_from_water_raster(min_val = 100, mean_val = 300, max_val = 1000):
     temp_fuzzy_raster = FuzzyMembership(distance_raster, f)
 
     distance_raster_final = Con(distance_raster < min_val, 0, temp_fuzzy_raster)
-    distance_raster_final.save("final_distance_raster")
+    distance_raster_final.save("distance_raster_water")
 
     #Usuwanie tego co jest po drodze, jeśli potrzebne to trza zakomentować i będzie git
     arcpy.management.Delete("woda_cala")
     arcpy.management.Delete("rzeka_a")
     arcpy.management.Delete("distance_raster")
+
+def distance_from_buildings_raster():
+    buildings = "budynek"
+
+    condition = "\"FOBUD\" = 'budynki mieszkalne'"
+    residental = arcpy.analysis.Select(buildings, "mieszkalne", condition)
+    distance_raster = DistanceAccumulation(residental)
+    distance_raster.save("distance_raster_temp")
+
+    f = FuzzyLinear(150, 1500)
+    fuzzy_raster = FuzzyMembership(distance_raster, f)
+    fuzzy_raster.save("distance_raster_residental")
+
+    #Usuwanie tego co jest po drodze, jeśli potrzebne to trza zakomentować i będzie git
+    arcpy.management.Delete("mieszkalne")
+    arcpy.management.Delete("distance_raster_temp")
 
 #####################
 # Wywołania funkcji #
@@ -64,3 +80,4 @@ def distance_from_water_raster(min_val = 100, mean_val = 300, max_val = 1000):
 #-odległość która jest dalej akceptowalna ale już mniej
 #-maksymalna akceptowalna odległość od wody
 #distance_from_water_raster()
+#distance_from_buildings_raster()
