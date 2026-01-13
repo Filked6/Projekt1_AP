@@ -9,15 +9,19 @@ arcpy.env.workspace = r"C:\Studia\Sezon_3\Analizy_przestrzenne\Projekt\projekt1\
 arcpy.env.overwriteOutput = True
 arcpy.env.outputCoordinateSystem = arcpy.SpatialReference(2180)
 arcpy.env.cellSize = 10
+arcpy.CheckOutExtension("Spatial")
 
 #################################
 # Ścieżki do danych do projektu #
 #################################
 bdot10k_data = r"C:\Studia\Sezon_3\Analizy_przestrzenne\Projekt\projekt1\Projekt1_AP_POPRAWNY\Projekt1_AP\3214_SHP"
 acceptable_file_names = ("budynek", "drogi", "lasy", "rezerwat1", "rezerwat2", "woda", "rzeka")
+dem_full_path = r"C:\Studia\Sezon_3\Analizy_przestrzenne\Projekt\projekt1\Marianowo_nmt.tif"
 
 project_path = r"C:\Studia\Sezon_3\Analizy_przestrzenne\Projekt\projekt1\Projekt1_AP_POPRAWNY\Projekt1_AP\Projekt1_AP.aprx"
 aprx = arcpy.mp.ArcGISProject(project_path)
+
+feature_dataset = "SiecDrogowa"
 
 ###########
 # Funkcje #
@@ -33,6 +37,23 @@ def import_shp_to_gdb(shp_folder, gdb, startings):
 
             print(f"Importuję do GDB: {shp} -> {out_name}")
             arcpy.management.CopyFeatures(full_path, out_path)
+
+    try:
+        arcpy.management.CreateFeatureDataset(gdb, "SiecDrogowa", spatial_reference=arcpy.SpatialReference(2180))
+    except:
+        print("Dataset już istnieje.")
+
+    arcpy.conversion.FeatureClassToFeatureClass(r"C:\Dane\drogi.shp", f"{gdb}\\{feature_dataset}", "Drogi")
+
+    arcpy.na.CreateNetworkDatasetFromTemplate(szablon_xml, f"{gdb}\\{feature_dataset}")
+
+    nd_path = f"{gdb}\\{feature_dataset}\\Drogi_ND"
+    arcpy.na.BuildNetwork(nd_path)
+
+    print("Sieć zbudowana i gotowa do analizy!")
+
+def import_nmt_to_gdb(dem_path, gdb):
+    arcpy.management.CopyRaster(dem_path, "nmt")
 
 def distance_from_water_raster(min_val = 100, mean_val = 300, max_val = 1000):
     river = "rzeka"
@@ -86,7 +107,7 @@ def distance_from_forest_raster(min_from_forest = 15, better = 100):
     arcpy.management.Delete("pokrycie_cale")
     arcpy.management.Delete("distance_raster_land_cover_temp")
 
-def road_availability():
+def road_availability_raster():
     road = "drogi"
     column_values1 = ["żwir", "tłuczeń"]
     column_values2 = ["kostka kamienna", "bruk", "kostka prefabrykowana"]
@@ -109,22 +130,56 @@ def road_availability():
                     row[1] = 3
                 cursor.updateRow(row)
 
-    raw_raster = LineDensity(road, "POPULATION", cell_size=20)
+    raw_raster = LineDensity(road, "POPULATION", cell_size=20, search_radius=3000)
+    raw_raster.save("raw_raster")
     max_val = raw_raster.maximum
     normalized_raster = raw_raster / max_val
     normalized_raster.save("density_normalized_0_1")
+
+    arcpy.management.Delete("raw_raster")
+
+def calculate_slope_raster():
+    dem = "nmt"
+    mask = 10.0
+
+    dem_clean = SetNull(Raster(dem) < 0.1, dem)
+    dem_clean.save("dem_cleaned")
+    slope_raster = Slope(dem_clean, "DEGREE", 1)
+    slope_raster.save("slope_raster_temp")
+
+    raster_mask = Con(Raster(slope_raster) > mask,0, (mask - Raster(slope_raster)) / mask)
+    raster_mask.save("slope_raster")
+
+    arcpy.management.Delete("slope_raster_temp")
+    arcpy.management.Delete("dem_cleaned")
+
+def solar_exposure_raster():
+    dem = "nmt"
+    target_direction = 180 #Południe
+    max_diff = 45
+
+    dem_raster = Raster(dem)
+    dem_clean = SetNull(dem_raster < 0.1, dem_raster)
+    aspect_raster = Aspect(dem_clean)
+    aspect_raster.save("solar_exposure_raster_temp")
+
+    diff = Abs(aspect_raster - target_direction)
+
+    aspect_score = Con(diff <= max_diff, 1 - (diff / max_diff),0)
+    aspect_score.save("solar_exposure_raster")
+
+    arcpy.management.Delete("solar_exposure_raster_temp")
 
 #####################
 # Wywołania funkcji #
 #####################
 #Tą funkcję się uruchamia tylko za pierwszym razem, gdy nie mamy plików shp w geobazie
 #import_shp_to_gdb(bdot10k_data, arcpy.env.workspace, acceptable_file_names)
+#import_nmt_to_gdb(dem_full_path, arcpy.env.workspace)
 
-#Funkcja przyjmuje po kolei 3 wartości:
-#-odległość bezpieczna od wody
-#-odległość która jest dalej akceptowalna ale już mniej
-#-maksymalna akceptowalna odległość od wody
 #distance_from_water_raster()
 #distance_from_buildings_raster()
 #distance_from_forest_raster()
-road_availability()
+#road_availability_raster()
+#calculate_slope_raster()
+#solar_exposure_raster()
