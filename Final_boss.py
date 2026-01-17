@@ -16,10 +16,12 @@ arcpy.CheckOutExtension("Network")
 # Ścieżki do danych do projektu #
 #################################
 bdot10k_data = r"C:\Studia\Sezon_3\Analizy_przestrzenne\Projekt\projekt1\Projekt1_AP_POPRAWNY\Projekt1_AP\3214_SHP"
-acceptable_file_names = ("budynek", "drogi", "lasy", "rezerwat1", "rezerwat2", "woda", "rzeka", "granice")
+acceptable_file_names = ("budynek", "drogi", "lasy", "rezerwat1", "rezerwat2", "woda", "rzeka", "granice",
+                         "PTZB", "PTRK", "PTUT", "PTTR", "PTKM", "PTGN", "PTPL", "PTSO", "PTWZ", "PTNZ")
 dem_full_path = r"C:\Studia\Sezon_3\Analizy_przestrzenne\Projekt\projekt1\Projekt1_AP_POPRAWNY\Projekt1_AP\Marianowo_nmt.tif"
 xml = r"C:\Studia\Sezon_3\Analizy_przestrzenne\Projekt\projekt1\Projekt1_AP_POPRAWNY\Projekt1_AP\network_road_xml.xml"
 facilities_path = r"C:\Studia\Sezon_3\Analizy_przestrzenne\Projekt\projekt1\Projekt1_AP_POPRAWNY\Projekt1_AP\facilities_network.shp"
+parcels_path = r"C:\Studia\Sezon_3\Analizy_przestrzenne\Projekt\projekt1\Projekt1_AP_POPRAWNY\Projekt1_AP\marianowo_dzialki.shp"
 
 project_path = r"C:\Studia\Sezon_3\Analizy_przestrzenne\Projekt\projekt1\Projekt1_AP_POPRAWNY\Projekt1_AP\Projekt1_AP.aprx"
 aprx = arcpy.mp.ArcGISProject(project_path)
@@ -76,11 +78,13 @@ def distance_from_water_raster(min_val = 100, mean_val = 300, max_val = 1000):
     temp_fuzzy_raster = FuzzyMembership(distance_raster, f)
 
     print("1. Tworzenie rastera odległości od wody...")
-    distance_raster_final = Con(distance_raster < min_val, 0, temp_fuzzy_raster)
+    temp_raster_with_zeros = Con(distance_raster < min_val, 0, temp_fuzzy_raster)
+
+    distance_raster_final = SetNull(distance_raster > (max_val - 50), temp_raster_with_zeros)
     distance_raster_final.save("distance_raster_water")
 
     #Usuwanie tego co jest po drodze, jeśli potrzebne to trza zakomentować i będzie git
-    arcpy.management.Delete("woda_cala")
+    #arcpy.management.Delete("woda_cala")
     arcpy.management.Delete("rzeka_a")
     arcpy.management.Delete("distance_raster")
 
@@ -137,12 +141,8 @@ def road_availability_raster():
                     row[1] = 0
                 elif material == "grunt naturalny":
                     row[1] = 0
-                elif material in column_values1:
-                    row[1] = 1
-                elif material in column_values2:
-                    row[1] = 2
                 else:
-                    row[1] = 3
+                    row[1] = 2
                 cursor.updateRow(row)
 
     raw_raster = LineDensity(road, "POPULATION", cell_size=20, search_radius=3000)
@@ -197,7 +197,7 @@ def calculate_drive_time_raster(shp_file, gdb):
     solver = arcpy.nax.ServiceArea(network_source)
 
     solver.distanceUnits = arcpy.nax.DistanceUnits.Meters
-    solver.defaultImpedanceCutoffs = [500, 1500, 3000, 5000, 8000, 10000]
+    solver.defaultImpedanceCutoffs = [500, 1000, 1500, 2500, 3500, 5000, 6500, 8500, 10500]
 
     solver.outputType = arcpy.nax.ServiceAreaOutputType.Polygons
     solver.travelDirection = arcpy.nax.TravelDirection.FromFacility
@@ -216,17 +216,23 @@ def calculate_drive_time_raster(shp_file, gdb):
 
     arcpy.management.AddField(road_network_shp, "SCORE", "FLOAT")
     code_block = """def calc_score(to_break):
-        if to_break <= 1500:
+        if to_break <= 500:
             return 1.0
-        elif to_break <= 3000:
-            return 0.8
+        elif to_break <= 1000:
+            return 0.95
+        elif to_break <= 1500:
+            return 0.90
+        elif to_break <= 2500:
+            return 0.80        
+        elif to_break <= 3500:
+            return 0.70
         elif to_break <= 5000:
-            return 0.6
-        elif to_break <= 8000:
-            return 0.4
-        elif to_break <= 10000:
-            return 0.2
-        else:
+            return 0.60
+        elif to_break <= 6500:
+            return 0.40
+        elif to_break <= 8500:
+            return 0.20
+        elif to_break <= 10500:
             return 0.0"""
 
     print("7. Tworzę raster odległości od węzłów.")
@@ -267,7 +273,38 @@ def combine_rasters():
     raster_clipped = ExtractByMask(raster, "granice_temp")
     raster_clipped.save(f"przyciety_raster")
 
+    in_raster = Raster(raster_clipped)
+    min_result = arcpy.GetRasterProperties_management(in_raster, "MINIMUM").getOutput(0)
+    max_result = arcpy.GetRasterProperties_management(in_raster, "MAXIMUM").getOutput(0)
+
+    min_val = float(min_result.replace(',', '.'))
+    max_val = float(max_result.replace(',', '.'))
+
+    normalized_raster = (in_raster - min_val) / (max_val - min_val)
+    normalized_raster.save("normalized_raster")
+
     arcpy.management.Delete("granice_temp")
+    arcpy.management.Delete("przyciety_raster")
+
+def choose_appropriate_parcel():
+    parcels = arcpy.management.CopyFeatures(parcels_path, "dzialki")
+
+
+def map_cost():
+    water = "water"
+    forest = "lasy"
+    build = "PTZB"
+    vegetation = "PTRK"
+    farm_longterm = "PTUT"
+    grass_farm_land = "PTTR"
+    under_road = "PTKM"
+    not_used = "PTGN"
+    playground = "PTPL"
+    trash_zone = "PTSO"
+    excavation_zone = "PTWZ"
+    else_zone = "PTNZ"
+
+
 
 #####################
 # Wywołania funkcji #
@@ -284,3 +321,26 @@ calculate_slope_raster()
 solar_exposure_raster()
 calculate_drive_time_raster(facilities_path, arcpy.env.workspace)
 combine_rasters()
+choose_appropriate_parcel()
+
+"""
+GMINA GRĘBÓW - gmina testowa
+"""
+
+
+"""
+Do mapy kosztów potrzebujemy narzędzie Cost Distance:
+input raster 
+- To co wyjdzie z wszystkich poprzednich kryteriów
+input cost raster:
+- samemu
+
+
+Po tym narzędzie cost path
+input:
+- koszty skumulowane
+- kierunki
+- linia energetyczna
+
+To tworzy przyłącze czyli raster
+"""
