@@ -2,6 +2,8 @@ import arcpy
 from arcpy.sa import *
 import os
 
+from shapefile import NODATA
+
 ########################
 # Zmienne środowiskowe #
 ########################
@@ -34,6 +36,8 @@ def import_shp_to_gdb(shp_folder, gdb, startings, xml_schema):
     feature_dataset = "SiecDrogowa"
 
     print("(0/2) Importuję pliki .shp z BDOT10k")
+    arcpy.management.CopyFeatures(parcels_path, "dzialki")
+
     for shp in folder:
         if shp.startswith(startings) and shp.endswith(".shp"):
             full_path = os.path.join(shp_folder, shp)
@@ -127,8 +131,6 @@ def distance_from_forest_raster(min_from_forest = 15, better = 100):
 
 def road_availability_raster():
     road = "drogi_dla_rastra"
-    column_values1 = ["żwir", "tłuczeń"]
-    column_values2 = ["kostka kamienna", "bruk", "kostka prefabrykowana"]
 
     print("4. Tworzę raster dostępności dróg")
     column_names = [f.name.upper() for f in arcpy.ListFields(road)]
@@ -286,9 +288,79 @@ def combine_rasters():
     arcpy.management.Delete("granice_temp")
     arcpy.management.Delete("przyciety_raster")
 
-def choose_appropriate_parcel():
-    parcels = arcpy.management.CopyFeatures(parcels_path, "dzialki")
 
+def choose_appropriate_parcel():
+    parcels = "dzialki"
+    normalized_raster = Raster("normalized_raster")
+    min_cover_pct = 50
+    id_field = "OBJECTID"
+    min_area = 20000
+    min_width = 50
+
+    reclass_raster = Con((normalized_raster >= 0.70) & (normalized_raster <= 1), 1)
+
+    temp1 = "temp_raster_poly"
+    arcpy.RasterToPolygon_conversion(reclass_raster, temp1, "NO_SIMPLIFY", "VALUE")
+
+    out_table = "memory/area_table"
+    arcpy.sa.TabulateArea(parcels, id_field, reclass_raster, "Value", out_table)
+
+    arcpy.management.JoinField(parcels, id_field, out_table, id_field, ["VALUE_1"])
+
+    where_clause = f"VALUE_1 IS NOT NULL AND (VALUE_1 / Shape_Area) * 100 >= {min_cover_pct} AND KLASOUZYTK <> 'dr'"
+    suitable_parcels = "memory/suitable_parcels_temp"
+    arcpy.analysis.Select(parcels, suitable_parcels, where_clause)
+
+    final_merged_parcels = "suitable_parcels_merged"
+
+    arcpy.management.Dissolve(in_features=suitable_parcels, out_feature_class=final_merged_parcels, dissolve_field=None,
+        statistics_fields=None, multi_part="SINGLE_PART", unsplit_lines="DISSOLVE_LINES")
+
+    final_clipped_areas = "obszary_na_dzialkach"
+
+    arcpy.analysis.Clip(in_features=temp1, clip_features=final_merged_parcels, out_feature_class=final_clipped_areas)
+
+    small_polys = arcpy.management.MultipartToSinglepart(in_features=final_clipped_areas, out_feature_class="obszary_pojedyncze")
+
+    arcpy.management.AddField(final_merged_parcels, "Zestaw", "LONG")
+    with arcpy.da.UpdateCursor(final_merged_parcels, ["Zestaw"]) as cursor:
+        i = 1
+        for row in cursor:
+            row[0] = i
+            cursor.updateRow(row)
+            i += 1
+
+    arcpy.analysis.SpatialJoin(target_features=small_polys, join_features=final_merged_parcels, out_feature_class="tagged_polygons",
+        join_operation="JOIN_ONE_TO_ONE", match_option="HAVE_THEIR_CENTER_IN")
+
+    final_multipolygons = "zestawy_finalne_multipolygon"
+
+    arcpy.management.Dissolve(in_features="tagged_polygons", out_feature_class=final_multipolygons, dissolve_field=["Zestaw"],
+        statistics_fields=None, multi_part="MULTI_PART", unsplit_lines="DISSOLVE_LINES")
+
+    wc1 = f'Shape_Area >= {min_area}'
+    arcpy.analysis.Select(final_multipolygons, "pole", wc1)
+    arcpy.management.AddField("pole", "width", "FLOAT")
+    arcpy.management.AddField("pole", "height", "FLOAT")
+
+    with arcpy.da.UpdateCursor("pole", ["SHAPE@", "width", "height"]) as cursor:
+        for row in cursor:
+            geom = row[0]
+            ext = geom.extent
+
+            row[1] = abs(ext.XMin - ext.XMax)
+            row[2] = abs(ext.YMin - ext.YMax)
+
+            cursor.updateRow(row)
+
+    wc2 = f'width >= {min_width} OR height >= {min_width}'
+    arcpy.analysis.Select("pole", "final_to_parcel", wc2)
+
+    arcpy.management.MakeFeatureLayer(final_merged_parcels, "duze_layer")
+
+    arcpy.management.SelectLayerByLocation(in_layer="duze_layer", select_features="final_to_parcel", selection_type="NEW_SELECTION")
+
+    arcpy.management.CopyFeatures("duze_layer", "wybrane_poligony_wynik")
 
 def map_cost():
     water = "water"
@@ -310,17 +382,17 @@ def map_cost():
 # Wywołania funkcji #
 #####################
 #Tą funkcję się uruchamia tylko za pierwszym razem, gdy nie mamy plików shp w geobazie
-import_shp_to_gdb(bdot10k_data, arcpy.env.workspace, acceptable_file_names, xml)
-import_nmt_to_gdb(dem_full_path)
+#import_shp_to_gdb(bdot10k_data, arcpy.env.workspace, acceptable_file_names, xml)
+#import_nmt_to_gdb(dem_full_path)
 
-distance_from_water_raster()
-distance_from_buildings_raster()
-distance_from_forest_raster()
-road_availability_raster()
-calculate_slope_raster()
-solar_exposure_raster()
-calculate_drive_time_raster(facilities_path, arcpy.env.workspace)
-combine_rasters()
+#distance_from_water_raster()
+#distance_from_buildings_raster()
+#distance_from_forest_raster()
+##road_availability_raster()
+#calculate_slope_raster()
+#solar_exposure_raster()
+#calculate_drive_time_raster(facilities_path, arcpy.env.workspace)
+#combine_rasters()
 choose_appropriate_parcel()
 
 """
