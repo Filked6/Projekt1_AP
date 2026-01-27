@@ -34,3 +34,4 @@ folder = r"C:\Studia\Sezon_3\Analizy_przestrzenne\Projekt\projekt1\Projekt1_AP_P
 #change_name(folder, "PTSO", "PTSO")
 #change_name(folder, "PTWZ", "PTWZ")
 #change_name(folder, "PTNZ", "PTNZ")
+#change_name(folder, "SULN", "linie_napowietrzne")

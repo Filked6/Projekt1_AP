@@ -17,8 +17,10 @@ arcpy.CheckOutExtension("Network")
 #################################
 # Ścieżki do danych do projektu #
 #################################
+
+
 bdot10k_data = r"C:\Studia\Sezon_3\Analizy_przestrzenne\Projekt\projekt1\Projekt1_AP_POPRAWNY\Projekt1_AP\3214_SHP"
-acceptable_file_names = ("budynek", "drogi", "lasy", "rezerwat1", "rezerwat2", "woda", "rzeka", "granice",
+acceptable_file_names = ("budynek", "drogi", "lasy", "rezerwat1", "rezerwat2", "woda", "rzeka", "granice", "linie_napowietrzne",
                          "PTZB", "PTRK", "PTUT", "PTTR", "PTKM", "PTGN", "PTPL", "PTSO", "PTWZ", "PTNZ")
 dem_full_path = r"C:\Studia\Sezon_3\Analizy_przestrzenne\Projekt\projekt1\Projekt1_AP_POPRAWNY\Projekt1_AP\Marianowo_nmt.tif"
 xml = r"C:\Studia\Sezon_3\Analizy_przestrzenne\Projekt\projekt1\Projekt1_AP_POPRAWNY\Projekt1_AP\network_road_xml.xml"
@@ -27,6 +29,7 @@ parcels_path = r"C:\Studia\Sezon_3\Analizy_przestrzenne\Projekt\projekt1\Projekt
 
 project_path = r"C:\Studia\Sezon_3\Analizy_przestrzenne\Projekt\projekt1\Projekt1_AP_POPRAWNY\Projekt1_AP\Projekt1_AP.aprx"
 aprx = arcpy.mp.ArcGISProject(project_path)
+
 
 ###########
 # Funkcje #
@@ -72,7 +75,8 @@ def distance_from_water_raster(min_val = 100, mean_val = 300, max_val = 1000):
     river = "rzeka"
     water = "woda"
 
-    print("Łączę wszystkie pliki z wodą...")
+    print("Kryterium 1: Odległość od rzek i zbiorników wodnych")
+    print("Łączenie wód...")
     river_a = arcpy.analysis.Buffer(river, "rzeka_a", "2 Meters")
     water_all = arcpy.management.Merge([river_a, water], "woda_cala")
     distance_raster = DistanceAccumulation(water_all)
@@ -81,27 +85,28 @@ def distance_from_water_raster(min_val = 100, mean_val = 300, max_val = 1000):
     f = FuzzyLinear(max_val, mean_val)
     temp_fuzzy_raster = FuzzyMembership(distance_raster, f)
 
-    print("1. Tworzenie rastera odległości od wody...")
     temp_raster_with_zeros = Con(distance_raster < min_val, 0, temp_fuzzy_raster)
 
+    print("Tworzenie rastra z odległością od wód...")
     distance_raster_final = SetNull(distance_raster > (max_val - 50), temp_raster_with_zeros)
     distance_raster_final.save("distance_raster_water")
 
     #Usuwanie tego co jest po drodze, jeśli potrzebne to trza zakomentować i będzie git
-    #arcpy.management.Delete("woda_cala")
+    arcpy.management.Delete("woda_cala")
     arcpy.management.Delete("rzeka_a")
     arcpy.management.Delete("distance_raster")
 
 def distance_from_buildings_raster(min_from_building = 150, better = 1500 ):
     buildings = "budynek"
 
+    print("Kryterium 2: Odległość od budynków mieszkalnych.")
     print("Wybieranie budynków mieszkalnych...")
     condition = "\"FOBUD\" = 'budynki mieszkalne'"
     residental = arcpy.analysis.Select(buildings, "mieszkalne", condition)
     distance_raster = DistanceAccumulation(residental)
     distance_raster.save("distance_raster_temp")
 
-    print("2. Tworzenie rastra odległości od budynków mieszkalnych...")
+    print("Tworzenie rastra odległości od budynków mieszkalnych...")
     f = FuzzyLinear(min_from_building, better)
     fuzzy_raster = FuzzyMembership(distance_raster, f)
     fuzzy_raster.save("distance_raster_residental")
@@ -115,12 +120,13 @@ def distance_from_forest_raster(min_from_forest = 15, better = 100):
     protected1 = "rezerwat1"
     protected2 = "rezerwat2"
 
-    print("Łączenie lasów i obszarów chronionych.")
+    print("Kryterium 3: Pokrycie terenu.")
+    print("Łączenie lasów i obszarów chronionych...")
     land_cover = arcpy.management.Merge([forest, protected1, protected2], "pokrycie_cale")
     distance_raster = DistanceAccumulation(land_cover)
     distance_raster.save("distance_raster_land_cover_temp")
 
-    print("3. Tworzenie rastra odległości od lasów i obszarów chronionych.")
+    print("Tworzenie rastra odległości od lasów i obszarów chronionych...")
     f = FuzzyLinear(min_from_forest, better)
     fuzzy_raster = FuzzyMembership(distance_raster, f)
     fuzzy_raster.save("distance_raster_land_cover")
@@ -132,7 +138,8 @@ def distance_from_forest_raster(min_from_forest = 15, better = 100):
 def road_availability_raster():
     road = "drogi_dla_rastra"
 
-    print("4. Tworzę raster dostępności dróg")
+    print("Kryterium 4: Dostęp do dróg utwardzonych")
+    print("Tworzę raster dostępności dróg")
     column_names = [f.name.upper() for f in arcpy.ListFields(road)]
     if "POPULATION" not in column_names:
         arcpy.management.AddField(road,"POPULATION", "SHORT")
@@ -153,21 +160,23 @@ def road_availability_raster():
     normalized_raster = raw_raster / max_val
     normalized_raster.save("density_normalized_0_1")
 
+    #Usuwanie niepotrzebnych pozostałości
     arcpy.management.Delete("raw_raster")
 
-def calculate_slope_raster():
+def calculate_slope_raster(mask = 10.0):
     dem = "nmt"
-    mask = 10.0
 
+    print("Kryterium 5: Nachylenie stoków.")
     dem_clean = SetNull(Raster(dem) < 0.1, dem)
     dem_clean.save("dem_cleaned")
     slope_raster = Slope(dem_clean, "DEGREE", 1)
     slope_raster.save("slope_raster_temp")
 
-    print("5. Tworzę raster nachylenia")
+    print("Tworzę raster nachylenia")
     raster_mask = Con(Raster(slope_raster) > mask,0, (mask - Raster(slope_raster)) / mask)
     raster_mask.save("slope_raster")
 
+    #Usuwanie niepotrzebnych pozostałości
     arcpy.management.Delete("slope_raster_temp")
     arcpy.management.Delete("dem_cleaned")
 
@@ -176,6 +185,7 @@ def solar_exposure_raster():
     target_direction = 180 #Południe
     max_diff = 45
 
+    print("Kryterium 6: Dostęp do światła słonecznego")
     dem_raster = Raster(dem)
     dem_clean = SetNull(dem_raster < 0.1, dem_raster)
     aspect_raster = Aspect(dem_clean)
@@ -183,15 +193,17 @@ def solar_exposure_raster():
 
     diff = Abs(aspect_raster - target_direction)
 
-    print("6. Tworzę raster dostępności do światła")
+    print("Tworzę raster dostępności do światła...")
     aspect_score = Con(diff <= max_diff, 1 - (diff / max_diff),0)
     aspect_score.save("solar_exposure_raster")
 
+    # Usuwanie niepotrzebnych pozostałości
     arcpy.management.Delete("solar_exposure_raster_temp")
 
 def calculate_drive_time_raster(shp_file, gdb):
     network_source = f"{gdb}\\SiecDrogowa\\netword_road"
 
+    print("Kryterium 7: Dobry dojazd od istotnych drogowych węzłów komunikacyjnych.")
     arcpy.conversion.FeatureClassToFeatureClass(shp_file, gdb, "facilities")
     facilities_path = f"{gdb}\\facilities"
 
@@ -214,9 +226,7 @@ def calculate_drive_time_raster(shp_file, gdb):
         output_path = f"{gdb}\\road_map_network"
         result.export(arcpy.nax.ServiceAreaOutputDataType.Polygons, output_path)
 
-    road_network_shp = "road_map_network"
-
-    arcpy.management.AddField(road_network_shp, "SCORE", "FLOAT")
+    arcpy.management.AddField("road_map_network", "SCORE", "FLOAT")
     code_block = """def calc_score(to_break):
         if to_break <= 500:
             return 1.0
@@ -237,15 +247,15 @@ def calculate_drive_time_raster(shp_file, gdb):
         elif to_break <= 10500:
             return 0.0"""
 
-    print("7. Tworzę raster odległości od węzłów.")
-    arcpy.management.CalculateField(road_network_shp, "SCORE", "calc_score(!ToBreak!)", "PYTHON3", code_block)
+    print("Tworzę raster odległości od węzłów.")
+    arcpy.management.CalculateField("road_map_network", "SCORE", "calc_score(!ToBreak!)", "PYTHON3", code_block)
     arcpy.conversion.PolygonToRaster(
         in_features="road_map_network",
         value_field="SCORE",
         out_rasterdataset="road_network_raster",
         cell_assignment="MAXIMUM_AREA",
         priority_field="SCORE",
-        cellsize= 10
+        cellsize= arcpy.env.cellSize
     )
 
 def combine_rasters():
@@ -260,14 +270,14 @@ def combine_rasters():
     ]
     boarders = "granice"
 
-    print("Łączę rastry...")
+    print("Łączę rastry z kryteriów 1-7.")
 
     raster_min = CellStatistics(lista_rastrow, "MINIMUM", "DATA")
     raster_mean = CellStatistics(lista_rastrow, "MEAN", "DATA")
 
     raster = Con(raster_min == 0, 0, raster_mean)
     raster.save("raster_merged")
-    print("Raster został poprawnie połączony...")
+    print("Rastery zostały poprawnie połączone...")
     print("Przycinanie rastra do wybranej gminy...")
 
     arcpy.management.MakeFeatureLayer(boarders, "granice_temp")
@@ -285,61 +295,55 @@ def combine_rasters():
     normalized_raster = (in_raster - min_val) / (max_val - min_val)
     normalized_raster.save("normalized_raster")
 
+    #Czyszczenie
     arcpy.management.Delete("granice_temp")
     arcpy.management.Delete("przyciety_raster")
 
-
-def choose_appropriate_parcel():
+def choose_appropriate_parcel(min_cover_pct = 50, min_area_ha = 2, min_width = 50, usefulness = 0.70):
     parcels = "dzialki"
     normalized_raster = Raster("normalized_raster")
-    min_cover_pct = 50
     id_field = "OBJECTID"
-    min_area = 20000
-    min_width = 50
+    min_area = min_area_ha * 10000
 
-    reclass_raster = Con((normalized_raster >= 0.70) & (normalized_raster <= 1), 1)
+    print("Kryterium 8: Ocena przydatności terenu. Min. 70% przydatności terenu.")
+    print("Wycinanie miejsc z mniejszą przydatnością...")
+    reclass_raster = Con((normalized_raster >= usefulness) & (normalized_raster <= 1), 1)
+    temp_polygons = arcpy.RasterToPolygon_conversion(reclass_raster, "memory/temp1", "NO_SIMPLIFY", "VALUE")
 
-    temp1 = "temp_raster_poly"
-    arcpy.RasterToPolygon_conversion(reclass_raster, temp1, "NO_SIMPLIFY", "VALUE")
+    arcpy.sa.TabulateArea(parcels, id_field, reclass_raster, "Value", "memory/area_table")
 
-    out_table = "memory/area_table"
-    arcpy.sa.TabulateArea(parcels, id_field, reclass_raster, "Value", out_table)
+    arcpy.management.JoinField(parcels, id_field, "memory/area_table", id_field, ["VALUE_1"])
 
-    arcpy.management.JoinField(parcels, id_field, out_table, id_field, ["VALUE_1"])
-
+    print("Kryterium 9: Przydatny obszar. Min. 50% na terenie działki")
     where_clause = f"VALUE_1 IS NOT NULL AND (VALUE_1 / Shape_Area) * 100 >= {min_cover_pct} AND KLASOUZYTK <> 'dr'"
-    suitable_parcels = "memory/suitable_parcels_temp"
-    arcpy.analysis.Select(parcels, suitable_parcels, where_clause)
+    suitable_parcels = arcpy.analysis.Select(parcels, "memory/suitable_parcels_temp", where_clause)
 
-    final_merged_parcels = "suitable_parcels_merged"
-
-    arcpy.management.Dissolve(in_features=suitable_parcels, out_feature_class=final_merged_parcels, dissolve_field=None,
+    arcpy.management.Dissolve(in_features=suitable_parcels, out_feature_class="suitable_parcels_merged", dissolve_field=None,
         statistics_fields=None, multi_part="SINGLE_PART", unsplit_lines="DISSOLVE_LINES")
 
-    final_clipped_areas = "obszary_na_dzialkach"
-
-    arcpy.analysis.Clip(in_features=temp1, clip_features=final_merged_parcels, out_feature_class=final_clipped_areas)
+    final_clipped_areas = arcpy.analysis.Clip(in_features= temp_polygons, clip_features="suitable_parcels_merged", out_feature_class="obszary_na_dzialkach")
 
     small_polys = arcpy.management.MultipartToSinglepart(in_features=final_clipped_areas, out_feature_class="obszary_pojedyncze")
 
-    arcpy.management.AddField(final_merged_parcels, "Zestaw", "LONG")
-    with arcpy.da.UpdateCursor(final_merged_parcels, ["Zestaw"]) as cursor:
+    arcpy.management.AddField("suitable_parcels_merged", "Zestaw", "LONG")
+    with arcpy.da.UpdateCursor("suitable_parcels_merged", ["Zestaw"]) as cursor:
         i = 1
         for row in cursor:
             row[0] = i
             cursor.updateRow(row)
             i += 1
 
-    arcpy.analysis.SpatialJoin(target_features=small_polys, join_features=final_merged_parcels, out_feature_class="tagged_polygons",
+    arcpy.analysis.SpatialJoin(target_features=small_polys, join_features="suitable_parcels_merged", out_feature_class="tagged_polygons",
         join_operation="JOIN_ONE_TO_ONE", match_option="HAVE_THEIR_CENTER_IN")
 
-    final_multipolygons = "zestawy_finalne_multipolygon"
-
-    arcpy.management.Dissolve(in_features="tagged_polygons", out_feature_class=final_multipolygons, dissolve_field=["Zestaw"],
+    final_multipolygons = arcpy.management.Dissolve(in_features="tagged_polygons", out_feature_class="zestawy_finalne_multipolygon", dissolve_field=["Zestaw"],
         statistics_fields=None, multi_part="MULTI_PART", unsplit_lines="DISSOLVE_LINES")
 
+    print("Kryterium 10: Powierzchnia obszaru powyżej 2ha.")
     wc1 = f'Shape_Area >= {min_area}'
     arcpy.analysis.Select(final_multipolygons, "pole", wc1)
+
+    print("Kryterium 11: Szerokość obszaru w pionie lub poziomie min. 50 metrów.")
     arcpy.management.AddField("pole", "width", "FLOAT")
     arcpy.management.AddField("pole", "height", "FLOAT")
 
@@ -356,63 +360,118 @@ def choose_appropriate_parcel():
     wc2 = f'width >= {min_width} OR height >= {min_width}'
     arcpy.analysis.Select("pole", "final_to_parcel", wc2)
 
-    arcpy.management.MakeFeatureLayer(final_merged_parcels, "duze_layer")
-
+    arcpy.management.MakeFeatureLayer("suitable_parcels_merged", "duze_layer")
     arcpy.management.SelectLayerByLocation(in_layer="duze_layer", select_features="final_to_parcel", selection_type="NEW_SELECTION")
+    arcpy.management.CopyFeatures("duze_layer", "kandydaci")
 
-    arcpy.management.CopyFeatures("duze_layer", "wybrane_poligony_wynik")
+    #Czyszczenie
+    arcpy.management.Delete("suitable_parcels_merged")
+    arcpy.management.Delete("obszary_pojedyncze")
+    arcpy.management.Delete("tagged_polygons")
+    arcpy.management.Delete("zestawy_finalne_multipolygon")
+    arcpy.management.Delete("pole")
+    arcpy.management.Delete("final_to_parcel")
+    arcpy.management.Delete("duze_layer")
 
-def map_cost():
-    water = "water"
-    forest = "lasy"
-    build = "PTZB"
-    vegetation = "PTRK"
-    farm_longterm = "PTUT"
-    grass_farm_land = "PTTR"
-    under_road = "PTKM"
-    not_used = "PTGN"
-    playground = "PTPL"
-    trash_zone = "PTSO"
-    excavation_zone = "PTWZ"
-    else_zone = "PTNZ"
+def map_cost(bdot, gdb):
+    parcels = "kandydaci"
+    airlines = "linie_napowietrzne"
 
+    print("Kryterium 12: Koszt przyłącza do sieci SN.")
+    wc = "RODZAJ <> 'linia telekomunikacyjna'"
+    electrolines = arcpy.analysis.Select(airlines, "linie_energetyczne", where_clause=wc)
 
+    data_mapping = {
+        "water": {"field": "RODZAJ", "values": {"woda morska": 0, "woda płynąca": 200, "woda stojąca": 0}},
+        "PTZB": {"field": "RODZAJ", "values": {"jednorodzinna": 100, "wielorodzinna": 200, "inna": 50, "handlowo_usługowa": 200, "przemysłowo-składowa": 200}},
+        "lasy": {"field": "RODZAJ", "values": {"las": 100, "zagajnik": 50, "zadrzewienie": 50}},
+        "PTRK": {"field": "RODZAJ", "values": {"krzewy": 15}},
+        "PTUT": {"field": "RODZAJ", "values": {"sad": 100, "plantacja": 90, "inne": 20, "ogródkki działkowe": 0}},
+        "PTTR": {"field": "RODZAJ", "values": {"uprawa na gruntach ornych": 1, "roślinność trawiasta": 20}},
+        "PTKM": {"field": "KOD10K", "values": 200},
+        "PTGN": {"field": "KOD10K", "values": 1},
+        "PTPL": {"field": "KOD10K", "values": 50},
+        "PTSO": {"field": "KOD10K", "values": 0},
+        "PTWZ": {"field": "KOD10K", "values": 0},
+        "PTNZ": {"field": "KOD10K", "values": 150}}
+
+    list_of_rasters = []
+
+    for name, info in data_mapping.items():
+        shp_path = os.path.join(bdot, f"{name}.shp")
+
+        if arcpy.Exists(shp_path):
+            print(f"Przetwarzam: {name}")
+            raster_name = f"r_{name}".replace(".", "_")
+            out_raster_path = os.path.join(gdb, raster_name)
+
+            temp_field = "COST_VAL"
+            if temp_field in [f.name for f in arcpy.ListFields(shp_path)]:
+                arcpy.management.DeleteField(shp_path, temp_field)
+
+            arcpy.management.AddField(shp_path, temp_field, "FLOAT")
+            mapping_values = info["values"]
+            field_name = info["field"]
+
+            with arcpy.da.UpdateCursor(shp_path, [field_name, temp_field]) as cursor:
+                for row in cursor:
+                    if isinstance(mapping_values, dict):
+                        val = mapping_values.get(row[0], 0)
+                        if val is None: val = 0
+                    else:
+                        val = mapping_values
+                        if val is None: val = 0
+
+                    row[1] = val
+                    cursor.updateRow(row)
+
+            temp_raw_rast = os.path.join("memory", "temp_raw")
+            arcpy.conversion.FeatureToRaster(shp_path, temp_field, temp_raw_rast, arcpy.env.cellSize)
+
+            cleaned_raster = SetNull(temp_raw_rast, temp_raw_rast, "VALUE = 0")
+
+            cleaned_raster.save(out_raster_path)
+            list_of_rasters.append(out_raster_path)
+
+            arcpy.management.Delete(temp_raw_rast)
+
+    print("Łączenie rastrów...")
+
+    arcpy.management.MosaicToNewRaster(input_rasters=list_of_rasters, output_location=gdb, raster_dataset_name_with_extension="final_raster_for_cost_distance", pixel_type="32_BIT_FLOAT", cellsize=arcpy.env.cellSize, number_of_bands=1, mosaic_method="MAXIMUM")
+
+    for r in list_of_rasters:
+        arcpy.management.Delete(r)
+
+    print("Tworzenie mapy kosztów...")
+    out_distance_raster = CostDistance(parcels, Raster("final_raster_for_cost_distance"), out_backlink_raster= "kierunki")
+    print("Wybieranie zwycięzcy...")
+    out_path_raster = CostPath(in_destination_data=electrolines, in_cost_distance_raster=out_distance_raster, in_cost_backlink_raster="kierunki", path_type="BEST_SINGLE")
+    out_path_raster.save("Ostateczna_linia")
+
+    arcpy.conversion.RasterToPolyline(out_path_raster, "path_polyline", "NODATA", 0, "SIMPLIFY")
+
+    arcpy.management.MakeFeatureLayer(parcels, "parcels_layer")
+    arcpy.management.SelectLayerByLocation(in_layer="parcels_layer", overlap_type="INTERSECT", select_features="path_polyline", selection_type="NEW_SELECTION")
+    arcpy.management.CopyFeatures("parcels_layer", "Winner")
+    print("Wybrano zwycięzcę. Działka/zestaw działek został zapisany w geobazie pod nazwą Winner.")
+
+    #Czyszczenie
+    arcpy.management.Delete("path_polyline")
 
 #####################
 # Wywołania funkcji #
 #####################
 #Tą funkcję się uruchamia tylko za pierwszym razem, gdy nie mamy plików shp w geobazie
-#import_shp_to_gdb(bdot10k_data, arcpy.env.workspace, acceptable_file_names, xml)
-#import_nmt_to_gdb(dem_full_path)
+import_shp_to_gdb(bdot10k_data, arcpy.env.workspace, acceptable_file_names, xml)
+import_nmt_to_gdb(dem_full_path)
 
-#distance_from_water_raster()
-#distance_from_buildings_raster()
-#distance_from_forest_raster()
-##road_availability_raster()
-#calculate_slope_raster()
-#solar_exposure_raster()
-#calculate_drive_time_raster(facilities_path, arcpy.env.workspace)
-#combine_rasters()
+distance_from_water_raster()
+distance_from_buildings_raster()
+distance_from_forest_raster()
+road_availability_raster()
+calculate_slope_raster()
+solar_exposure_raster()
+calculate_drive_time_raster(facilities_path, arcpy.env.workspace)
+combine_rasters()
 choose_appropriate_parcel()
-
-"""
-GMINA GRĘBÓW - gmina testowa
-"""
-
-
-"""
-Do mapy kosztów potrzebujemy narzędzie Cost Distance:
-input raster 
-- To co wyjdzie z wszystkich poprzednich kryteriów
-input cost raster:
-- samemu
-
-
-Po tym narzędzie cost path
-input:
-- koszty skumulowane
-- kierunki
-- linia energetyczna
-
-To tworzy przyłącze czyli raster
-"""
+map_cost(bdot10k_data, arcpy.env.workspace)
