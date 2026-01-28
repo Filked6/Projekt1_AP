@@ -2,8 +2,6 @@ import arcpy
 from arcpy.sa import *
 import os
 
-from shapefile import NODATA
-
 ########################
 # Zmienne środowiskowe #
 ########################
@@ -14,14 +12,14 @@ arcpy.env.cellSize = 10
 arcpy.CheckOutExtension("Spatial")
 arcpy.CheckOutExtension("Network")
 
+acceptable_file_names = ("budynek", "drogi", "lasy", "rezerwat1", "rezerwat2", "woda", "rzeka", "granice", "linie_napowietrzne",
+                         "PTZB", "PTRK", "PTUT", "PTTR", "PTKM", "PTGN", "PTPL", "PTSO", "PTWZ", "PTNZ")
 #################################
 # Ścieżki do danych do projektu #
 #################################
 
 
 bdot10k_data = r"C:\Studia\Sezon_3\Analizy_przestrzenne\Projekt\projekt1\Projekt1_AP_POPRAWNY\Projekt1_AP\3214_SHP"
-acceptable_file_names = ("budynek", "drogi", "lasy", "rezerwat1", "rezerwat2", "woda", "rzeka", "granice", "linie_napowietrzne",
-                         "PTZB", "PTRK", "PTUT", "PTTR", "PTKM", "PTGN", "PTPL", "PTSO", "PTWZ", "PTNZ")
 dem_full_path = r"C:\Studia\Sezon_3\Analizy_przestrzenne\Projekt\projekt1\Projekt1_AP_POPRAWNY\Projekt1_AP\Marianowo_nmt.tif"
 xml = r"C:\Studia\Sezon_3\Analizy_przestrzenne\Projekt\projekt1\Projekt1_AP_POPRAWNY\Projekt1_AP\network_road_xml.xml"
 facilities_path = r"C:\Studia\Sezon_3\Analizy_przestrzenne\Projekt\projekt1\Projekt1_AP_POPRAWNY\Projekt1_AP\facilities_network.shp"
@@ -111,7 +109,7 @@ def distance_from_buildings_raster(min_from_building = 150, better = 1500 ):
     fuzzy_raster = FuzzyMembership(distance_raster, f)
     fuzzy_raster.save("distance_raster_residental")
 
-    #Usuwanie tego co jest po drodze, jeśli potrzebne to trza zakomentować i będzie git
+    #Czyszczenie
     arcpy.management.Delete("mieszkalne")
     arcpy.management.Delete("distance_raster_temp")
 
@@ -244,11 +242,12 @@ def calculate_drive_time_raster(shp_file, gdb):
             return 0.40
         elif to_break <= 8500:
             return 0.20
-        elif to_break <= 10500:
+        elif to_break <= 12500:
             return 0.0"""
 
     print("Tworzę raster odległości od węzłów.")
-    arcpy.management.CalculateField("road_map_network", "SCORE", "calc_score(!ToBreak!)", "PYTHON3", code_block)
+    arcpy.management.CalculateField("road_map_network", "SCORE",
+                                    "calc_score(!ToBreak!)", "PYTHON3", code_block)
     arcpy.conversion.PolygonToRaster(
         in_features="road_map_network",
         value_field="SCORE",
@@ -258,44 +257,51 @@ def calculate_drive_time_raster(shp_file, gdb):
         cellsize= arcpy.env.cellSize
     )
 
-def combine_rasters():
-    lista_rastrow = [
-        "distance_raster_water",
-        "distance_raster_residental",
-        "distance_raster_land_cover",
-        "density_normalized_0_1",
-        "slope_raster",
-        "solar_exposure_raster",
-        "road_network_raster"
-    ]
+def combine_rasters(gmina = "Marianowo"):
+    weights = {
+        "distance_raster_water": 0.10,
+        "distance_raster_residental": 0.10,
+        "distance_raster_land_cover": 0.15,
+        "density_normalized_0_1": 0.05,
+        "slope_raster": 0.20,
+        "solar_exposure_raster": 0.20,
+        "road_network_raster": 0.20
+    }
     boarders = "granice"
 
-    print("Łączę rastry z kryteriów 1-7.")
+    print("Łączę rastry...")
 
+    lista_rastrow = list(weights.keys())
     raster_min = CellStatistics(lista_rastrow, "MINIMUM", "DATA")
-    raster_mean = CellStatistics(lista_rastrow, "MEAN", "DATA")
 
-    raster = Con(raster_min == 0, 0, raster_mean)
+    raster_weighted_sum = 0
+    for raster_name, weight in weights.items():
+        raster_weighted_sum += Raster(raster_name) * weight
+
+    raster = Con(raster_min == 0, 0, raster_weighted_sum)
     raster.save("raster_merged")
-    print("Rastery zostały poprawnie połączone...")
+
+    print("Rastry zostały połączone.")
     print("Przycinanie rastra do wybranej gminy...")
 
     arcpy.management.MakeFeatureLayer(boarders, "granice_temp")
-    arcpy.management.SelectLayerByAttribute("granice_temp", "NEW_SELECTION", "NAZWA = 'Marianowo'")
+    arcpy.management.SelectLayerByAttribute("granice_temp", "NEW_SELECTION", f"NAZWA = '{gmina}'")
     raster_clipped = ExtractByMask(raster, "granice_temp")
-    raster_clipped.save(f"przyciety_raster")
+    raster_clipped.save("przyciety_raster")
 
-    in_raster = Raster(raster_clipped)
+    in_raster = Raster("przyciety_raster")
     min_result = arcpy.GetRasterProperties_management(in_raster, "MINIMUM").getOutput(0)
     max_result = arcpy.GetRasterProperties_management(in_raster, "MAXIMUM").getOutput(0)
 
     min_val = float(min_result.replace(',', '.'))
     max_val = float(max_result.replace(',', '.'))
 
-    normalized_raster = (in_raster - min_val) / (max_val - min_val)
-    normalized_raster.save("normalized_raster")
+    if max_val != min_val:
+        normalized_raster = (in_raster - min_val) / (max_val - min_val)
+        normalized_raster.save("normalized_raster")
+    else:
+        in_raster.save("normalized_raster")
 
-    #Czyszczenie
     arcpy.management.Delete("granice_temp")
     arcpy.management.Delete("przyciety_raster")
 
@@ -368,51 +374,84 @@ def choose_appropriate_parcel(min_cover_pct = 50, min_area_ha = 2, min_width = 5
     arcpy.management.Delete("suitable_parcels_merged")
     arcpy.management.Delete("obszary_pojedyncze")
     arcpy.management.Delete("tagged_polygons")
-    arcpy.management.Delete("zestawy_finalne_multipolygon")
+    #arcpy.management.Delete("zestawy_finalne_multipolygon")
     arcpy.management.Delete("pole")
     arcpy.management.Delete("final_to_parcel")
     arcpy.management.Delete("duze_layer")
 
+
 def map_cost(bdot, gdb):
     parcels = "kandydaci"
     airlines = "linie_napowietrzne"
+    borders = "granice"
 
     print("Kryterium 12: Koszt przyłącza do sieci SN.")
     wc = "RODZAJ <> 'linia telekomunikacyjna'"
+
     electrolines = arcpy.analysis.Select(airlines, "linie_energetyczne", where_clause=wc)
 
+    arcpy.management.MakeFeatureLayer(parcels, "kandydaci_layer_check")
+    arcpy.management.SelectLayerByLocation(
+        in_layer="kandydaci_layer_check",
+        overlap_type="INTERSECT",
+        select_features="linie_energetyczne",
+        selection_type="NEW_SELECTION"
+    )
+
+    direct_count = int(arcpy.management.GetCount("kandydaci_layer_check").getOutput(0))
+
+    if direct_count > 0:
+        print(f"Znaleziono {direct_count} działek przecinających linię energetyczną..")
+        arcpy.management.CopyFeatures("kandydaci_layer_check", "Winner")
+        arcpy.management.Delete("kandydaci_layer_check")
+
+    arcpy.management.Delete("kandydaci_layer_check")
+
+    count_lines = int(arcpy.management.GetCount("linie_energetyczne").getOutput(0))
+    if count_lines == 0:
+        print("Brak linii energetycznych.")
+
     data_mapping = {
-        "water": {"field": "RODZAJ", "values": {"woda morska": 0, "woda płynąca": 200, "woda stojąca": 0}},
-        "PTZB": {"field": "RODZAJ", "values": {"jednorodzinna": 100, "wielorodzinna": 200, "inna": 50, "handlowo_usługowa": 200, "przemysłowo-składowa": 200}},
+        "woda": {"field": "RODZAJ", "values": {"woda morska": 900, "woda płynąca": 200, "woda stojąca": 900}},
+        "PTZB": {"field": "RODZAJ",
+        "values": {"jednorodzinna": 100, "wielorodzinna": 200, "inna": 50, "handlowo_usługowa": 200,
+        "przemysłowo-składowa": 200}},
         "lasy": {"field": "RODZAJ", "values": {"las": 100, "zagajnik": 50, "zadrzewienie": 50}},
         "PTRK": {"field": "RODZAJ", "values": {"krzewy": 15}},
-        "PTUT": {"field": "RODZAJ", "values": {"sad": 100, "plantacja": 90, "inne": 20, "ogródkki działkowe": 0}},
+        "PTUT": {"field": "RODZAJ", "values": {"sad": 100, "plantacja": 90, "inne": 20, "ogródkki działkowe": 900}},
         "PTTR": {"field": "RODZAJ", "values": {"uprawa na gruntach ornych": 1, "roślinność trawiasta": 20}},
         "PTKM": {"field": "KOD10K", "values": 200},
         "PTGN": {"field": "KOD10K", "values": 1},
         "PTPL": {"field": "KOD10K", "values": 50},
-        "PTSO": {"field": "KOD10K", "values": 0},
-        "PTWZ": {"field": "KOD10K", "values": 0},
-        "PTNZ": {"field": "KOD10K", "values": 150}}
+        "PTSO": {"field": "KOD10K", "values": 900},
+        "PTWZ": {"field": "KOD10K", "values": 900},
+        "PTNZ": {"field": "KOD10K", "values": 150}
+    }
 
     list_of_rasters = []
+    if arcpy.Exists(borders):
+        try:
+            arcpy.management.AddField(borders, "BASE_COST", "SHORT")
+            arcpy.management.CalculateField(borders, "BASE_COST", "1", "PYTHON3")
+        except:
+            pass
+
+    out_bg_raster = os.path.join(gdb, "r_background")
+    arcpy.conversion.FeatureToRaster(borders, "BASE_COST", out_bg_raster, arcpy.env.cellSize)
+    list_of_rasters.append(out_bg_raster)
 
     for name, info in data_mapping.items():
         shp_path = os.path.join(bdot, f"{name}.shp")
-
         if arcpy.Exists(shp_path):
             print(f"Przetwarzam: {name}")
             raster_name = f"r_{name}".replace(".", "_")
             out_raster_path = os.path.join(gdb, raster_name)
-
             temp_field = "COST_VAL"
             if temp_field in [f.name for f in arcpy.ListFields(shp_path)]:
                 arcpy.management.DeleteField(shp_path, temp_field)
-
             arcpy.management.AddField(shp_path, temp_field, "FLOAT")
             mapping_values = info["values"]
             field_name = info["field"]
-
             with arcpy.da.UpdateCursor(shp_path, [field_name, temp_field]) as cursor:
                 for row in cursor:
                     if isinstance(mapping_values, dict):
@@ -421,42 +460,44 @@ def map_cost(bdot, gdb):
                     else:
                         val = mapping_values
                         if val is None: val = 0
-
                     row[1] = val
                     cursor.updateRow(row)
-
             temp_raw_rast = os.path.join("memory", "temp_raw")
             arcpy.conversion.FeatureToRaster(shp_path, temp_field, temp_raw_rast, arcpy.env.cellSize)
-
             cleaned_raster = SetNull(temp_raw_rast, temp_raw_rast, "VALUE = 0")
-
             cleaned_raster.save(out_raster_path)
             list_of_rasters.append(out_raster_path)
-
             arcpy.management.Delete(temp_raw_rast)
-
     print("Łączenie rastrów...")
-
-    arcpy.management.MosaicToNewRaster(input_rasters=list_of_rasters, output_location=gdb, raster_dataset_name_with_extension="final_raster_for_cost_distance", pixel_type="32_BIT_FLOAT", cellsize=arcpy.env.cellSize, number_of_bands=1, mosaic_method="MAXIMUM")
-
+    arcpy.management.MosaicToNewRaster(input_rasters=list_of_rasters, output_location=gdb,
+    raster_dataset_name_with_extension="final_raster_for_cost_distance",
+    pixel_type="32_BIT_FLOAT", cellsize=arcpy.env.cellSize, number_of_bands=1,
+    mosaic_method="MAXIMUM")
     for r in list_of_rasters:
-        arcpy.management.Delete(r)
-
-    print("Tworzenie mapy kosztów...")
-    out_distance_raster = CostDistance(parcels, Raster("final_raster_for_cost_distance"), out_backlink_raster= "kierunki")
-    print("Wybieranie zwycięzcy...")
-    out_path_raster = CostPath(in_destination_data=electrolines, in_cost_distance_raster=out_distance_raster, in_cost_backlink_raster="kierunki", path_type="BEST_SINGLE")
+        if "r_background" not in r:
+            arcpy.management.Delete(r)
+    print("Tworzenie mapy kosztów i wyznaczanie trasy...")
+    out_distance_raster = CostDistance(parcels, Raster("final_raster_for_cost_distance"),
+    out_backlink_raster="kierunki")
+    arcpy.management.CalculateStatistics("kierunki")
+    out_path_raster = CostPath(in_destination_data=electrolines, in_cost_distance_raster=out_distance_raster,
+    in_cost_backlink_raster="kierunki", path_type="BEST_SINGLE")
     out_path_raster.save("Ostateczna_linia")
 
-    arcpy.conversion.RasterToPolyline(out_path_raster, "path_polyline", "NODATA", 0, "SIMPLIFY")
+    try:
+        arcpy.conversion.RasterToPolyline(out_path_raster, "path_polyline", "NODATA", 0, "SIMPLIFY")
 
-    arcpy.management.MakeFeatureLayer(parcels, "parcels_layer")
-    arcpy.management.SelectLayerByLocation(in_layer="parcels_layer", overlap_type="INTERSECT", select_features="path_polyline", selection_type="NEW_SELECTION")
-    arcpy.management.CopyFeatures("parcels_layer", "Winner")
-    print("Wybrano zwycięzcę. Działka/zestaw działek został zapisany w geobazie pod nazwą Winner.")
+        line_count = int(arcpy.management.GetCount("path_polyline").getOutput(0))
+        if line_count > 0:
+            arcpy.management.MakeFeatureLayer(parcels, "parcels_layer")
+            arcpy.management.SelectLayerByLocation(in_layer="parcels_layer", overlap_type="INTERSECT",
+            select_features="path_polyline", selection_type="NEW_SELECTION")
+            arcpy.management.CopyFeatures("parcels_layer", "Winner")
+            print("Wybrano zwycięzcę.")
+    except Exception as e:
+        print(f"Błąd podczas tworzenia linii: {e}")
 
-    #Czyszczenie
-    arcpy.management.Delete("path_polyline")
+    if arcpy.Exists("path_polyline"): arcpy.management.Delete("path_polyline")
 
 #####################
 # Wywołania funkcji #
